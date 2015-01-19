@@ -100,7 +100,7 @@ module Akami
 
       def key_info
         {
-          "KeyInfo" => {
+          "KeyInfo" => [{
             "wsse:SecurityTokenReference" => {
               "wsse:Reference/" => nil,
               :attributes! => { "wsse:Reference/" => {
@@ -108,8 +108,18 @@ module Akami
                 "URI" => "##{security_token_id}",
               } }
             },
-            :attributes! => { "wsse:SecurityTokenReference" => { "xmlns:wsu" => "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd" } },
-          },
+          },{
+            "wsse:SecurityTokenReference" => {
+              "dsig:X509Data" => {
+                "dsig:X509Certificate" => certs.cert.to_pem.gsub(/(?:\n|-----(?:BEGIN|END) CERTIFICATE-----)/, ''),
+                "dsig:X509IssuerSerial" => {
+                  "dsig:X509IssuerName" => certs.cert.issuer,
+                  "dsig:X509SerialNumber" => certs.cert.serial
+                }
+              },
+              :attributes! => { "dsig:X509Data" => { "xmlns:dsig" => "http://www.w3.org/2000/09/xmldsig#" } }
+            },
+          }],
         }
       end
 
@@ -120,18 +130,25 @@ module Akami
       end
 
       def signed_info
+        reference = [
+          signed_info_transforms.merge(signed_info_digest_method).merge({ "DigestValue" => body_digest })
+        ]
+        reference_sign_info = { "URI" => ["##{body_id}"] }
+
+        if timestamp_digest?
+          reference << signed_info_transforms.merge(signed_info_digest_method).merge({ "DigestValue" => timestamp_digest })
+          reference_sign_info["URI"] << "##{timestamp_id}"
+        end
+
         {
           "SignedInfo" => {
             "CanonicalizationMethod/" => nil,
             "SignatureMethod/" => nil,
-            "Reference" => [
-              #signed_info_transforms.merge(signed_info_digest_method).merge({ "DigestValue" => timestamp_digest }),
-              signed_info_transforms.merge(signed_info_digest_method).merge({ "DigestValue" => body_digest }),
-            ],
+            "Reference" => reference,
             :attributes! => {
               "CanonicalizationMethod/" => { "Algorithm" => ExclusiveXMLCanonicalizationAlgorithm },
               "SignatureMethod/" => { "Algorithm" => RSASHA1SignatureAlgorithm },
-              "Reference" => { "URI" => ["##{body_id}"] },
+              "Reference" => reference_sign_info,
             },
             :order! => [ "CanonicalizationMethod/", "SignatureMethod/", "Reference" ],
           },
@@ -149,6 +166,19 @@ module Akami
       def body_digest
         body = canonicalize(at_xpath(@document, "//Envelope/Body"))
         Base64.encode64(OpenSSL::Digest::SHA1.digest(body)).strip
+      end
+
+      def timestamp_digest
+        timestamp = canonicalize(at_xpath(@document, "//Envelope/Header/Security/Timestamp"))
+        Base64.encode64(OpenSSL::Digest::SHA1.digest(timestamp)).strip
+      end
+
+      def timestamp_digest?
+        at_xpath(@document, "//Envelope/Header/Security/Timestamp").is_a? Nokogiri::XML::Element
+      end
+
+      def timestamp_id
+        at_xpath(@document, "//Envelope/Header/Security/Timestamp").attr("wsu:Id")
       end
 
       def signed_info_digest_method

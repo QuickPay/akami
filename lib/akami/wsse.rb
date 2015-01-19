@@ -9,6 +9,8 @@ require "gyoku"
 require "akami/wsse/verify_signature"
 require "akami/wsse/signature"
 
+require "pp"
+
 module Akami
 
   # = Akami::WSSE
@@ -92,7 +94,14 @@ module Akami
     # Returns the XML for a WSSE header.
     def to_xml
       if signature? and signature.have_document?
-        Gyoku.xml wsse_signature.merge!(hash)
+        if timestamp?
+          wsse_hash = wsse_signature.deep_merge wsu_timestamp
+          wsse_hash["wsse:Security"][:order!] = wsse_hash["wsse:Security"][:order!].insert(0, "wsu:Timestamp")
+        else
+          wsse_hash = wsse_signature
+        end
+
+        Gyoku.xml(wsse_hash.merge!(hash))
       elsif username_token? && timestamp?
         Gyoku.xml wsse_username_token.merge!(wsu_timestamp) {
           |key, v1, v2| v1.merge!(v2) {
@@ -163,9 +172,11 @@ module Akami
       end
 
       if signature?
-        sec_hash[:attributes!].merge!("soapenv:mustUnderstand" => "1")
-      else
-        sec_hash["wsse:Security"].merge!(:attributes! => { key => { "wsu:Id" => "#{tag}-#{count}", "xmlns:wsu" => WSU_NAMESPACE } })
+        sec_hash[:attributes!]["wsse:Security"].merge!("env:mustUnderstand" => "1")
+      end
+
+      if timestamp? || username_token?
+        sec_hash["wsse:Security"].deep_merge!(:attributes! => { key => { "wsu:Id" => "#{tag}-#{count}", "xmlns:wsu" => WSU_NAMESPACE } })
       end
 
       sec_hash
